@@ -111,6 +111,3 @@ See `scripts/fetch_news.py` — the `FEEDS` list at the top is the full configur
 | No post at all | All feeds returned no items in the last 24h, or the script errored. Check Actions logs. |
 | Embed truncated | Lots of high-quality items today. Adjust `PER_CATEGORY_LIMIT` in `fetch_news.py`. |
 
-## License
-
-MIT (placeholder — confirm at charter ratification).
