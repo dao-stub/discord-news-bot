@@ -225,9 +225,36 @@ def post_to_webhook(webhook_url: str, embeds: list[dict]) -> None:
 # --- Main --------------------------------------------------------------------
 
 
+def is_dry_run() -> bool:
+    return os.environ.get("DRY_RUN", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def print_dry_run_preview(embeds: list[dict]) -> None:
+    """Show what would be posted, formatted for human reading in Actions log."""
+    print()
+    print("=" * 70)
+    print(f"DRY RUN — would post {len(embeds)} embed(s) to webhook (no actual post made)")
+    print("=" * 70)
+    for i, embed in enumerate(embeds, 1):
+        color_hex = f"#{embed.get('color', 0):06X}"
+        print()
+        print(f"[EMBED {i}] {embed['title']}  (color {color_hex})")
+        print("-" * 70)
+        print(embed["description"])
+        print()
+        footer = embed.get("footer", {}).get("text", "")
+        if footer:
+            print(f"-- {footer}")
+    print()
+    print("=" * 70)
+    print("DRY RUN complete. No Discord post made.")
+    print("=" * 70)
+
+
 def main() -> int:
+    dry_run = is_dry_run()
     webhook_url = os.environ.get("DISCORD_WEBHOOK_NEWS")
-    if not webhook_url:
+    if not webhook_url and not dry_run:
         print("[error] DISCORD_WEBHOOK_NEWS env var not set", file=sys.stderr)
         return 2
 
@@ -236,7 +263,7 @@ def main() -> int:
         print("[info] No items fetched at all — nothing to post.")
         return 0
     ranked = dedupe_and_rank(items)
-    print(f"[info] Fetched {len(items)} items; {len(ranked)} after dedupe.")
+    print(f"[info] Fetched {len(items)} items; {len(ranked)} after dedupe + per-source cap.")
 
     by_category: dict[str, list[Item]] = {"cybersec": [], "ai": []}
     for it in ranked:
@@ -251,6 +278,10 @@ def main() -> int:
 
     if not embeds:
         print("[info] Nothing to post (all categories empty).")
+        return 0
+
+    if dry_run:
+        print_dry_run_preview(embeds)
         return 0
 
     # Discord allows up to 10 embeds per message — we have 2.
