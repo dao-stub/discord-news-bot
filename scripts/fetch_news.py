@@ -23,16 +23,35 @@ from dateutil import parser as date_parser
 # --- Configuration -----------------------------------------------------------
 
 LOOKBACK_HOURS = 24
-PER_CATEGORY_LIMIT = 12  # max items per category in the Discord post
+PER_CATEGORY_LIMIT = 8           # max items per category in the Discord post
+MAX_ITEMS_PER_SOURCE = 2         # no single source can dominate; forces diversity
 HTTP_TIMEOUT_SECONDS = 15
-USER_AGENT = "cybersec-news-bot/0.1 (https://github.com/your-org/discord-news-bot)"
+USER_AGENT = "cybersec-news-bot/0.2 (https://github.com/your-org/discord-news-bot)"
+
+# Case-insensitive substring matches in title — items matching these are dropped as noise.
+# These are admin / promotional patterns that show up in feeds but aren't security content.
+TITLE_DENYLIST_PATTERNS: list[str] = [
+    "speaking engagement",
+    "upcoming event",
+    "upcoming talk",
+    "newsletter",
+    "subscribe to",
+    "webinar:",
+    "sponsored",
+    "register now",
+    "join us at",
+    "weekly recap",
+    "monthly recap",
+    "year in review",
+]
 
 # Each entry: (category, source_name, feed_url, authority_tier)
 # Authority tiers used for ranking when we have too many items.
+# CISA Alerts (general advisories feed) is excluded — it's mostly ICS firehose;
+# we rely on CISA KEV for the actually-curated high-signal alerts.
 FEEDS: list[tuple[str, str, str, int]] = [
     # --- CYBERSEC ---
     ("cybersec", "CISA KEV",            "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.xml", 3),
-    ("cybersec", "CISA Alerts",         "https://www.cisa.gov/cybersecurity-advisories/all.xml", 3),
     ("cybersec", "Project Zero",        "https://googleprojectzero.blogspot.com/feeds/posts/default", 3),
     ("cybersec", "Krebs on Security",   "https://krebsonsecurity.com/feed/", 3),
     ("cybersec", "Schneier on Security","https://www.schneier.com/feed/atom/", 3),
@@ -116,6 +135,11 @@ def fetch_one(category: str, source: str, url: str, authority: int) -> list[Item
         if not title or not link:
             continue
 
+        # Skip noise patterns (admin/promotional posts that aren't actual content).
+        title_lower = title.lower()
+        if any(pat in title_lower for pat in TITLE_DENYLIST_PATTERNS):
+            continue
+
         summary_raw = entry.get("summary") or entry.get("description") or ""
         # Strip HTML tags crudely; keep it short.
         import re
@@ -150,8 +174,19 @@ def dedupe_and_rank(items: Iterable[Item]) -> list[Item]:
         existing = seen.get(it.fingerprint)
         if existing is None or it.authority > existing.authority:
             seen[it.fingerprint] = it
-    # Sort by authority desc, then published desc
-    return sorted(seen.values(), key=lambda x: (-x.authority, -x.published.timestamp()))
+    # Sort by authority desc, then published desc.
+    ranked = sorted(seen.values(), key=lambda x: (-x.authority, -x.published.timestamp()))
+
+    # Cap items per source so a single firehose feed can't dominate the output.
+    per_source_counts: dict[str, int] = {}
+    diverse: list[Item] = []
+    for it in ranked:
+        key = f"{it.category}|{it.source}"
+        if per_source_counts.get(key, 0) >= MAX_ITEMS_PER_SOURCE:
+            continue
+        per_source_counts[key] = per_source_counts.get(key, 0) + 1
+        diverse.append(it)
+    return diverse
 
 
 # --- Posting -----------------------------------------------------------------
